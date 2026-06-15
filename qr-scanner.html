@@ -1,0 +1,461 @@
+<!DOCTYPE html>
+<html lang="nl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, maximum-scale=1.0, user-scalable=no">
+<meta name="theme-color" content="#0E0F12">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<title>Scanner</title>
+<style>
+  :root{
+    --bg:#0E0F12;
+    --panel:#16181D;
+    --line:#262A31;
+    --ink:#EDEAE3;
+    --muted:#8A8F99;
+    --signal:#FFB627;        /* lock-on amber */
+    --signal-dim:#7a5a16;
+    --ok:#9BE06B;
+    --danger:#FF6B6B;
+  }
+  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  html,body{height:100%}
+  body{
+    margin:0;
+    background:var(--bg);
+    color:var(--ink);
+    font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+    overflow:hidden;
+    display:flex;flex-direction:column;
+    height:100dvh;
+  }
+  /* ---- top bar ---- */
+  header{
+    display:flex;align-items:baseline;gap:.6rem;
+    padding:max(.9rem,env(safe-area-inset-top)) 1.1rem .7rem;
+  }
+  header .dot{
+    width:8px;height:8px;border-radius:50%;background:var(--muted);
+    align-self:center;transition:background .25s, box-shadow .25s;
+  }
+  header.live .dot{background:var(--signal);box-shadow:0 0 0 4px rgba(255,182,39,.18)}
+  header h1{
+    font-size:.95rem;font-weight:650;letter-spacing:.14em;text-transform:uppercase;margin:0;
+  }
+  header .status{margin-left:auto;font-size:.72rem;color:var(--muted);letter-spacing:.04em}
+
+  /* ---- viewport ---- */
+  .stage{
+    position:relative;flex:1;min-height:0;margin:0 .6rem;border-radius:18px;overflow:hidden;
+    background:#000;border:1px solid var(--line);
+  }
+  video{width:100%;height:100%;object-fit:cover;display:block;background:#000}
+  #overlay{position:absolute;inset:0;width:100%;height:100%;pointer-events:none}
+
+  /* reticle */
+  .reticle{
+    position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);
+    width:min(64vw,260px);aspect-ratio:1;pointer-events:none;
+  }
+  .corner{position:absolute;width:34px;height:34px;border:3px solid var(--signal);transition:all .18s}
+  .corner.tl{top:0;left:0;border-right:0;border-bottom:0;border-radius:6px 0 0 0}
+  .corner.tr{top:0;right:0;border-left:0;border-bottom:0;border-radius:0 6px 0 0}
+  .corner.bl{bottom:0;left:0;border-right:0;border-top:0;border-radius:0 0 0 6px}
+  .corner.br{bottom:0;right:0;border-left:0;border-top:0;border-radius:0 0 6px 0}
+  .reticle.searching .corner{opacity:.55;animation:breathe 1.8s ease-in-out infinite}
+  .reticle.hit .corner{border-color:var(--ok);width:42px;height:42px;opacity:1}
+  @keyframes breathe{0%,100%{opacity:.4}50%{opacity:.85}}
+  .scanline{
+    position:absolute;left:8%;right:8%;height:2px;top:0;
+    background:linear-gradient(90deg,transparent,var(--signal),transparent);
+    box-shadow:0 0 12px var(--signal);opacity:.9;animation:sweep 2.4s ease-in-out infinite;
+  }
+  .reticle.hit .scanline{display:none}
+  @keyframes sweep{0%{top:4%}50%{top:96%}100%{top:4%}}
+  .hint{
+    position:absolute;left:0;right:0;bottom:14px;text-align:center;
+    font-size:.78rem;color:rgba(237,234,227,.8);text-shadow:0 1px 3px rgba(0,0,0,.6);
+    padding:0 1rem;
+  }
+
+  /* messages / errors over the stage */
+  .splash{
+    position:absolute;inset:0;display:flex;flex-direction:column;
+    align-items:center;justify-content:center;gap:1rem;text-align:center;padding:2rem;
+    background:rgba(14,15,18,.92);
+  }
+  .splash p{color:var(--muted);max-width:30ch;line-height:1.5;font-size:.9rem;margin:0}
+  .splash.err .icon{color:var(--danger)}
+  .splash .icon{font-size:2.2rem}
+
+  /* ---- controls ---- */
+  .controls{
+    display:flex;align-items:center;justify-content:center;gap:.7rem;
+    padding:.9rem 1rem max(1rem,env(safe-area-inset-bottom));
+  }
+  button{
+    font-family:inherit;font-size:.9rem;font-weight:600;color:var(--ink);
+    background:var(--panel);border:1px solid var(--line);border-radius:12px;
+    padding:.7rem 1rem;cursor:pointer;display:inline-flex;align-items:center;gap:.45rem;
+    transition:transform .08s, border-color .15s, background .15s;
+  }
+  button:active{transform:scale(.96)}
+  button:disabled{opacity:.4;cursor:default}
+  button.primary{background:var(--signal);color:#1a1206;border-color:var(--signal)}
+  button.icon{padding:.7rem;width:46px;height:46px;justify-content:center}
+  button.on{border-color:var(--signal);color:var(--signal)}
+  svg{width:20px;height:20px;display:block}
+
+  /* ---- result sheet ---- */
+  .sheet{
+    position:fixed;left:0;right:0;bottom:0;z-index:20;
+    background:var(--panel);border-top:1px solid var(--line);
+    border-radius:20px 20px 0 0;padding:1.1rem 1.1rem max(1.2rem,env(safe-area-inset-bottom));
+    transform:translateY(110%);transition:transform .28s cubic-bezier(.2,.8,.2,1);
+    box-shadow:0 -12px 40px rgba(0,0,0,.5);
+  }
+  .sheet.open{transform:translateY(0)}
+  .sheet .badge{
+    display:inline-block;font-size:.66rem;letter-spacing:.12em;text-transform:uppercase;
+    color:var(--signal);border:1px solid var(--signal-dim);border-radius:999px;
+    padding:.22rem .6rem;margin-bottom:.7rem;
+  }
+  .sheet .value{
+    font-family:ui-monospace,"SF Mono",Menlo,Consolas,monospace;
+    font-size:.92rem;line-height:1.5;word-break:break-all;
+    background:var(--bg);border:1px solid var(--line);border-radius:12px;
+    padding:.8rem .9rem;max-height:34vh;overflow:auto;color:var(--ink);
+  }
+  .sheet .value a{color:var(--signal)}
+  .sheet .meta{font-size:.78rem;color:var(--muted);margin:.6rem 0 .9rem}
+  .sheet .row{display:flex;gap:.6rem;flex-wrap:wrap}
+  .sheet .row button{flex:1;justify-content:center;min-width:120px}
+
+  /* ---- history ---- */
+  .history{padding:.2rem 1rem 0}
+  .history h2{font-size:.7rem;letter-spacing:.12em;text-transform:uppercase;color:var(--muted);margin:.4rem .2rem}
+  .history ul{list-style:none;margin:0;padding:0;max-height:18vh;overflow:auto}
+  .history li{
+    display:flex;align-items:center;gap:.6rem;padding:.55rem .2rem;border-bottom:1px solid var(--line);
+    font-size:.82rem;color:var(--muted);cursor:pointer;
+  }
+  .history li .txt{flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:var(--ink);
+    font-family:ui-monospace,Menlo,monospace;font-size:.78rem}
+  .history li .t{font-size:.7rem}
+  .history:empty{display:none}
+
+  .toast{
+    position:fixed;left:50%;bottom:calc(env(safe-area-inset-bottom) + 96px);transform:translateX(-50%) translateY(20px);
+    background:#000;border:1px solid var(--line);color:var(--ink);
+    padding:.6rem 1rem;border-radius:10px;font-size:.82rem;opacity:0;transition:.2s;z-index:30;pointer-events:none;
+  }
+  .toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
+</style>
+</head>
+<body>
+  <header id="bar">
+    <span class="dot"></span>
+    <h1>Scanner</h1>
+    <span class="status" id="status">gereed</span>
+  </header>
+
+  <div class="stage">
+    <video id="video" playsinline muted></video>
+    <canvas id="overlay"></canvas>
+
+    <div class="reticle searching" id="reticle">
+      <span class="corner tl"></span><span class="corner tr"></span>
+      <span class="corner bl"></span><span class="corner br"></span>
+      <div class="scanline"></div>
+    </div>
+    <div class="hint" id="hint">Richt op een QR-code</div>
+
+    <div class="splash" id="splash">
+      <div class="icon">▣</div>
+      <p>Tik op <b>Start</b> om de camera te openen. Er wordt niets verstuurd of opgeslagen — alles blijft op je toestel.</p>
+    </div>
+  </div>
+
+  <div class="history" id="history"></div>
+
+  <div class="controls">
+    <button id="startBtn" class="primary">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+      Start
+    </button>
+    <button id="stopBtn" disabled>Stop</button>
+    <button id="torchBtn" class="icon" title="Zaklamp" hidden>
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 18h6M10 22h4M12 2a7 7 0 0 0-4 12.7V17h8v-2.3A7 7 0 0 0 12 2z"/></svg>
+    </button>
+    <button id="flipBtn" class="icon" title="Wissel camera" hidden>
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 7h4l2-2h6l2 2h4v12H3z"/><path d="M9 13a3 3 0 1 0 6 0 3 3 0 0 0-6 0"/></svg>
+    </button>
+    <button id="fileBtn" class="icon" title="Scan uit afbeelding">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="M21 15l-5-5L5 21"/></svg>
+    </button>
+    <input type="file" id="fileInput" accept="image/*" hidden>
+  </div>
+
+  <div class="sheet" id="sheet">
+    <span class="badge" id="sheetBadge">Tekst</span>
+    <div class="value" id="sheetValue"></div>
+    <div class="meta" id="sheetMeta"></div>
+    <div class="row">
+      <button id="actOpen" class="primary" hidden>Open</button>
+      <button id="actCopy">Kopieer</button>
+      <button id="actShare" hidden>Deel</button>
+      <button id="actAgain">Opnieuw scannen</button>
+    </div>
+  </div>
+
+  <div class="toast" id="toast"></div>
+
+<script>
+(() => {
+  const $ = id => document.getElementById(id);
+  const video=$('video'), overlay=$('overlay'), octx=overlay.getContext('2d');
+  const reticle=$('reticle'), splash=$('splash'), bar=$('bar'), status=$('status'), hint=$('hint');
+  const startBtn=$('startBtn'), stopBtn=$('stopBtn'), torchBtn=$('torchBtn'), flipBtn=$('flipBtn');
+  const fileBtn=$('fileBtn'), fileInput=$('fileInput');
+  const sheet=$('sheet'), sheetVal=$('sheetValue'), sheetBadge=$('sheetBadge'), sheetMeta=$('sheetMeta');
+  const actOpen=$('actOpen'), actCopy=$('actCopy'), actShare=$('actShare'), actAgain=$('actAgain');
+  const historyBox=$('history'); const toast=$('toast');
+
+  let stream=null, track=null, detector=null, raf=null;
+  let scanning=false, paused=false, useJsQR=false, jsqrReady=false;
+  let facing='environment', torchOn=false, lastValue=null, lastHit=0;
+  const history=[];
+
+  const hasBarcode = 'BarcodeDetector' in window;
+
+  function setStatus(t){ status.textContent=t; }
+  function showToast(t){ toast.textContent=t; toast.classList.add('show'); setTimeout(()=>toast.classList.remove('show'),1600); }
+
+  // ---------- detection ----------
+  function classify(v){
+    const s=v.trim();
+    if(/^https?:\/\//i.test(s)) return {type:'Link', url:s};
+    if(/^WIFI:/i.test(s)){
+      const ssid=(s.match(/S:([^;]*)/)||[])[1]||'';
+      const enc=(s.match(/T:([^;]*)/)||[])[1]||'';
+      return {type:'Wi-Fi netwerk', meta:`Netwerk: ${ssid}${enc?' · '+enc:''}`};
+    }
+    if(/^(mailto:|MATMSG:)/i.test(s)) return {type:'E-mail'};
+    if(/^tel:/i.test(s)) return {type:'Telefoon'};
+    if(/^(BEGIN:VCARD|MECARD:)/i.test(s)) return {type:'Contact'};
+    if(/^geo:/i.test(s)) return {type:'Locatie', url:'https://maps.google.com/?q='+encodeURIComponent(s.replace(/^geo:/i,''))};
+    if(/^bitcoin:/i.test(s)) return {type:'Betaling'};
+    return {type:'Tekst'};
+  }
+
+  function onDetected(value, points){
+    const now=Date.now();
+    if(value===lastValue && now-lastHit<2500) return;
+    lastValue=value; lastHit=now;
+    if(navigator.vibrate) navigator.vibrate(60);
+    reticle.classList.remove('searching'); reticle.classList.add('hit');
+    if(points && points.length) flashPoints(points);
+    paused=true;
+    showResult(value);
+    addHistory(value);
+  }
+
+  function showResult(value){
+    const info=classify(value);
+    sheetBadge.textContent=info.type;
+    sheetVal.textContent=value;
+    sheetMeta.textContent=info.meta || '';
+    sheetMeta.style.display=info.meta? 'block':'none';
+    const link=info.url || (info.type==='Link'? value:null);
+    if(link){ actOpen.hidden=false; actOpen.onclick=()=>window.open(link,'_blank','noopener'); }
+    else actOpen.hidden=true;
+    actCopy.onclick=()=>{ navigator.clipboard?.writeText(value).then(()=>showToast('Gekopieerd')); };
+    if(navigator.share){ actShare.hidden=false; actShare.onclick=()=>navigator.share({text:value}).catch(()=>{}); }
+    else actShare.hidden=true;
+    sheet.classList.add('open');
+  }
+
+  function addHistory(value){
+    history.unshift({v:value,t:new Date()});
+    if(history.length>20) history.pop();
+    renderHistory();
+  }
+  function renderHistory(){
+    if(!history.length){ historyBox.innerHTML=''; return; }
+    historyBox.innerHTML='<h2>Recent (deze sessie)</h2><ul></ul>';
+    const ul=historyBox.querySelector('ul');
+    history.forEach(h=>{
+      const li=document.createElement('li');
+      const time=h.t.toLocaleTimeString('nl-NL',{hour:'2-digit',minute:'2-digit'});
+      li.innerHTML=`<span class="txt"></span><span class="t">${time}</span>`;
+      li.querySelector('.txt').textContent=h.v;
+      li.onclick=()=>showResult(h.v);
+      ul.appendChild(li);
+    });
+  }
+
+  function flashPoints(pts){
+    fitOverlay();
+    octx.clearRect(0,0,overlay.width,overlay.height);
+    const sx=overlay.width/video.videoWidth, sy=overlay.height/video.videoHeight;
+    octx.beginPath();
+    pts.forEach((p,i)=>{ const x=p.x*sx, y=p.y*sy; i?octx.lineTo(x,y):octx.moveTo(x,y); });
+    octx.closePath();
+    octx.strokeStyle='#9BE06B'; octx.lineWidth=4; octx.stroke();
+    setTimeout(()=>octx.clearRect(0,0,overlay.width,overlay.height),700);
+  }
+  function fitOverlay(){ overlay.width=overlay.clientWidth; overlay.height=overlay.clientHeight; }
+
+  // ---------- camera ----------
+  async function start(){
+    splash.style.display='none';
+    setStatus('camera openen…');
+    try{
+      stream = await navigator.mediaDevices.getUserMedia({
+        video:{ facingMode:{ideal:facing}, width:{ideal:1280}, height:{ideal:720} }, audio:false
+      });
+    }catch(e){ return fail(e); }
+    video.srcObject=stream;
+    try{ await video.play(); }catch(e){}
+    track = stream.getVideoTracks()[0];
+
+    // torch capability
+    const caps = track.getCapabilities ? track.getCapabilities() : {};
+    torchBtn.hidden = !('torch' in caps);
+    torchOn=false; torchBtn.classList.remove('on');
+
+    // multiple cameras?
+    try{
+      const devs = await navigator.mediaDevices.enumerateDevices();
+      flipBtn.hidden = devs.filter(d=>d.kind==='videoinput').length < 2;
+    }catch(e){}
+
+    if(hasBarcode){ detector = new BarcodeDetector({formats:['qr_code']}); useJsQR=false; }
+    else { useJsQR=true; await ensureJsQR(); }
+
+    scanning=true; paused=false; lastValue=null;
+    bar.classList.add('live'); setStatus('scannen');
+    reticle.classList.remove('hit'); reticle.classList.add('searching');
+    startBtn.disabled=true; stopBtn.disabled=false;
+    loop();
+  }
+
+  async function loop(){
+    if(!scanning) return;
+    if(!paused && video.readyState>=2){
+      try{
+        if(useJsQR && jsqrReady){
+          const c=grab(); 
+          if(c){ const code=window.jsQR(c.data,c.width,c.height,{inversionAttempts:'dontInvert'});
+            if(code && code.data) onDetected(code.data, code.location? toPts(code.location):null); }
+        } else if(detector){
+          const codes=await detector.detect(video);
+          if(codes.length) onDetected(codes[0].rawValue, codes[0].cornerPoints);
+        }
+      }catch(e){/* frame skip */}
+    }
+    raf=requestAnimationFrame(loop);
+  }
+  function toPts(loc){ return [loc.topLeftCorner,loc.topRightCorner,loc.bottomRightCorner,loc.bottomLeftCorner]; }
+
+  const work=document.createElement('canvas'); const wctx=work.getContext('2d',{willReadFrequently:true});
+  function grab(){
+    const w=video.videoWidth, h=video.videoHeight; if(!w||!h) return null;
+    work.width=w; work.height=h; wctx.drawImage(video,0,0,w,h);
+    return wctx.getImageData(0,0,w,h);
+  }
+
+  function stop(){
+    scanning=false; if(raf) cancelAnimationFrame(raf);
+    if(track){ try{track.stop();}catch(e){} }
+    if(stream){ stream.getTracks().forEach(t=>t.stop()); }
+    stream=track=null; video.srcObject=null;
+    bar.classList.remove('live'); setStatus('gestopt');
+    startBtn.disabled=false; stopBtn.disabled=true;
+    torchBtn.hidden=true; flipBtn.hidden=true;
+    splash.style.display='flex'; splash.classList.remove('err');
+    splash.querySelector('.icon').textContent='▣';
+    splash.querySelector('p').innerHTML='Tik op <b>Start</b> om verder te scannen.';
+  }
+
+  async function toggleTorch(){
+    if(!track) return;
+    torchOn=!torchOn;
+    try{ await track.applyConstraints({advanced:[{torch:torchOn}]}); torchBtn.classList.toggle('on',torchOn); }
+    catch(e){ showToast('Zaklamp niet beschikbaar'); torchOn=false; }
+  }
+
+  async function flip(){
+    facing = facing==='environment' ? 'user' : 'environment';
+    const wasScanning=scanning; stop();
+    if(wasScanning){ await start(); }
+  }
+
+  function fail(e){
+    splash.style.display='flex'; splash.classList.add('err');
+    splash.querySelector('.icon').textContent='⚠';
+    const msg = (e && e.name==='NotAllowedError')
+      ? 'Geen toestemming voor de camera. Sta camera toe in je browser en probeer opnieuw. Tip: dit werkt alleen via <b>https://</b> of localhost.'
+      : (e && e.name==='NotFoundError') ? 'Geen camera gevonden op dit toestel.'
+      : 'Camera kon niet worden geopend. Gebruik eventueel de afbeelding-knop rechtsonder om een QR uit een foto te lezen.';
+    splash.querySelector('p').innerHTML=msg;
+    setStatus('camera geblokkeerd');
+    startBtn.disabled=false; stopBtn.disabled=true;
+  }
+
+  // ---------- scan from image file ----------
+  fileBtn.onclick=()=>fileInput.click();
+  fileInput.onchange=async ()=>{
+    const f=fileInput.files[0]; if(!f) return;
+    setStatus('afbeelding lezen…');
+    try{
+      const bmp=await createImageBitmap(f);
+      let value=null, pts=null;
+      if(hasBarcode){
+        const det = detector || new BarcodeDetector({formats:['qr_code']});
+        const codes=await det.detect(bmp);
+        if(codes.length){ value=codes[0].rawValue; pts=codes[0].cornerPoints; }
+      } else {
+        await ensureJsQR();
+        const cv=document.createElement('canvas'); cv.width=bmp.width; cv.height=bmp.height;
+        const cx=cv.getContext('2d'); cx.drawImage(bmp,0,0);
+        const img=cx.getImageData(0,0,cv.width,cv.height);
+        const code=window.jsQR(img.data,img.width,img.height);
+        if(code) value=code.data;
+      }
+      if(value){ onDetected(value,pts); setStatus(scanning?'scannen':'gereed'); }
+      else { showToast('Geen QR-code gevonden'); setStatus(scanning?'scannen':'gereed'); }
+    }catch(e){ showToast('Kon afbeelding niet lezen'); }
+    fileInput.value='';
+  };
+
+  // ---------- jsQR fallback loader ----------
+  function ensureJsQR(){
+    if(jsqrReady) return Promise.resolve();
+    return new Promise((res,rej)=>{
+      const s=document.createElement('script');
+      s.src='https://cdnjs.cloudflare.com/ajax/libs/jsQR/1.4.0/jsQR.min.js';
+      s.onload=()=>{ jsqrReady=true; res(); };
+      s.onerror=()=>{ showToast('Geen internet voor fallback'); rej(); };
+      document.head.appendChild(s);
+    });
+  }
+
+  // ---------- wiring ----------
+  startBtn.onclick=start;
+  stopBtn.onclick=stop;
+  torchBtn.onclick=toggleTorch;
+  flipBtn.onclick=flip;
+  actAgain.onclick=()=>{
+    sheet.classList.remove('open');
+    reticle.classList.remove('hit'); reticle.classList.add('searching');
+    paused=false; lastValue=null;
+    if(!scanning){ /* allow restart from history view */ }
+  };
+  window.addEventListener('resize',fitOverlay);
+  document.addEventListener('visibilitychange',()=>{ if(document.hidden && scanning) stop(); });
+})();
+</script>
+</body>
+</html>
